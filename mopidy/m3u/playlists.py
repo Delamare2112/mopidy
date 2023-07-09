@@ -98,17 +98,7 @@ class M3UPlaylistsProvider(backend.PlaylistsProvider):
             return True
 
     def get_items(self, uri):
-        path = translator.uri_to_path(uri)
-        if not self._is_in_basedir(path):
-            logger.debug("Ignoring path outside playlist dir: %s", uri)
-            return None
-        try:
-            with self._open(path, "r") as fp:
-                items = translator.load_items(fp, self._base_dir)
-        except OSError as e:
-            log_environment_error(f"Error reading playlist {uri!r}", e)
-        else:
-            return items
+        return self._recurse_load(uri)
 
     def lookup(self, uri):
         path = translator.uri_to_path(uri)
@@ -116,12 +106,11 @@ class M3UPlaylistsProvider(backend.PlaylistsProvider):
             logger.debug("Ignoring path outside playlist dir: %s", uri)
             return None
         try:
-            with self._open(path, "r") as fp:
-                items = translator.load_items(fp, self._base_dir)
             mtime = self._abspath(path).stat().st_mtime
         except OSError as e:
             log_environment_error(f"Error reading playlist {uri!r}", e)
         else:
+            items = self._recurse_load(uri)
             return translator.playlist(path, items, mtime)
 
     def refresh(self):
@@ -146,6 +135,27 @@ class M3UPlaylistsProvider(backend.PlaylistsProvider):
             log_environment_error(f"Error saving playlist {playlist.uri!r}", e)
         else:
             return translator.playlist(path, playlist.tracks, mtime)
+
+    def _recurse_load(self, uri, skip_list=None):
+        if skip_list == None:
+            skip_list = []
+        path = translator.uri_to_path(uri)
+        if not self._is_in_basedir(path):
+            logger.debug("Ignoring path outside playlist dir: %s", uri)
+            return []
+        try:
+            with self._open(path, "r") as fp:
+                items = translator.load_items(fp, self._base_dir)
+        except OSError as e:
+            log_environment_error(f"Error reading playlist {uri!r}", e)
+        else:
+            skip_list.append(uri)
+            items = [item for item in items if not item.uri in skip_list]
+            playlists = [item for item in items if item.uri.startswith("m3u:")]
+            for playlist in playlists:
+                items.remove(playlist)
+                items.extend(self._recurse_load(playlist.uri, skip_list=skip_list))
+            return items
 
     def _abspath(self, path):
         if not path.is_absolute():
